@@ -1,15 +1,18 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+mod lock;
 pub mod raw;
+
+pub type MappedRwLockReadGuard<'a, T> = lock_api::MappedRwLockReadGuard<'a, lock::RawRwLock, T>;
 
 #[cfg(feature = "std")]
 pub type CacheMapShard<K, V, S = hashbrown::hash_map::DefaultHashBuilder> =
-    raw::RawCacheMapShard<K, V, S, parking_lot::RawRwLock>;
+    raw::RawCacheMapShard<K, V, S, lock::RawRwLock, parking_lot::RawMutex>;
 
 #[cfg(feature = "std")]
 pub struct CacheMap<K, V, S = hashbrown::hash_map::DefaultHashBuilder> {
     shift: u32,
-    shards: Box<[raw::RawCacheMapShardInner<K, V, parking_lot::RawRwLock>]>,
+    shards: Box<[raw::RawCacheMapShardInner<K, V, lock::RawRwLock, parking_lot::RawMutex>]>,
     hasher: S,
 }
 
@@ -46,9 +49,12 @@ where
         &self,
         key: &K,
         value: impl FnOnce() -> V,
-    ) -> parking_lot::MappedRwLockReadGuard<'_, (K, V)> {
+    ) -> MappedRwLockReadGuard<'_, (K, V)> {
         let hash = self.hasher.hash_one(key);
-        let shard = &self.shards[((hash as usize) << 7) >> self.shift];
+        let shard = unsafe {
+            self.shards
+                .get_unchecked(((hash as usize) << 7) >> self.shift)
+        };
         shard.get_or_insert(hash, key, value, &self.hasher)
     }
 }
